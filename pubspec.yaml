@@ -1,0 +1,50 @@
+name: voice_spell
+description: "Voice Spell Utility - Cast spells with your voice to control your phone"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # State Management & DI
+  flutter_riverpod: ^2.6.1
+
+  # Database
+  sqflite: ^2.4.1
+  path: ^1.9.0
+  uuid: ^4.5.1
+
+  # Speech Recognition
+  speech_to_text: ^7.0.0
+  permission_handler: ^11.3.1
+
+  # IAP
+  in_app_purchase: ^3.2.1
+  purchases_flutter: ^8.2.2
+
+  # Device Actions
+  torch_light: ^1.0.0
+  url_launcher: ^6.3.1
+
+  # Haptics & Feedback
+  vibration: ^2.0.0
+
+  # Utilities
+  cupertino_icons: ^1.0.8
+  intl: ^0.20.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  generate: true
