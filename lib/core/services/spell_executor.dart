@@ -1,55 +1,70 @@
-import 'dart:convert';
-import 'package:flutter/services.dart';
+import 'dart:async';
 import 'package:torch_light/torch_light.dart';
+import 'package:screen_brightness/screen_brightness.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest_all.dart' as tz_data;
+import 'package:volume_controller/volume_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../domain/models/spell.dart';
 
-/// Service to execute spell actions
+/// Executes spell actions on the device.
 class SpellExecutor {
   static final SpellExecutor instance = SpellExecutor._();
   SpellExecutor._();
 
   bool _flashlightOn = false;
+  bool _isMuted = false;
+  double _volumeBeforeMute = 0.5;
+  bool _tzInitialized = false;
 
-  Future<bool> executeSpell(String actionType, String? actionParams) async {
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
+  bool _notificationsInitialized = false;
+
+  final VolumeController _volume = VolumeController();
+
+  Future<void> _ensureTzInitialized() async {
+    if (!_tzInitialized) {
+      tz_data.initializeTimeZones();
+      _tzInitialized = true;
+    }
+  }
+
+  Future<void> initNotifications() async {
+    if (_notificationsInitialized) return;
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const initSettings = InitializationSettings(android: androidSettings);
+    await _notifications.initialize(initSettings);
+    _notificationsInitialized = true;
+  }
+
+  Future<bool> execute(Spell spell) async {
     try {
-      switch (actionType) {
-        case 'FLASHLIGHT_TOGGLE':
-          return await _toggleFlashlight();
+      switch (spell.actionType) {
+        case SpellAction.toggleFlashlight:
+          return _toggleFlashlight();
 
-        case 'DARK_MODE':
-          // Dark mode would require platform-specific code
-          // For now, just return success
-          return true;
+        case SpellAction.revelio:
+          return _revelio();
 
-        case 'TIMER_START':
-          if (actionParams != null) {
-            final params = jsonDecode(actionParams);
-            final duration = params['duration'] as int;
-            return await _startTimer(duration);
+        case SpellAction.adjustBrightness:
+          return _toggleBrightness();
+
+        case SpellAction.setTimer:
+          return _setTimer();
+
+        case SpellAction.muteUnmute:
+          return _toggleMute();
+
+        case SpellAction.customIntent:
+          if (spell.intentUrl != null && spell.intentUrl!.isNotEmpty) {
+            return _launchUrl(spell.intentUrl!);
           }
-          return false;
-
-        case 'OPEN_APP':
-          if (actionParams != null) {
-            final params = jsonDecode(actionParams);
-            final app = params['app'] as String;
-            return await _openApp(app);
-          }
-          return false;
-
-        case 'BRIGHTNESS_MAX':
-          // Brightness control requires platform-specific code
-          return true;
-
-        case 'BRIGHTNESS_MIN':
-          // Brightness control requires platform-specific code
-          return true;
-
-        default:
           return false;
       }
     } catch (e) {
-      print('Error executing spell: $e');
       return false;
     }
   }
@@ -64,91 +79,110 @@ class SpellExecutor {
         _flashlightOn = true;
       }
       return true;
-    } catch (e) {
-      print('Error toggling flashlight: $e');
+    } catch (_) {
       return false;
     }
   }
 
-  Future<bool> _startTimer(int durationSeconds) async {
+  /// Revelio: enable flashlight for 3 seconds then disable.
+  Future<bool> _revelio() async {
     try {
-      // Open clock app with timer
-      final url = Uri.parse('clock://timer?duration=$durationSeconds');
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url);
-        return true;
-      }
-      return false;
-    } catch (e) {
-      print('Error starting timer: $e');
+      await TorchLight.enableTorch();
+      await Future.delayed(const Duration(seconds: 3));
+      await TorchLight.disableTorch();
+      _flashlightOn = false;
+      return true;
+    } catch (_) {
       return false;
     }
   }
 
-  Future<bool> _openApp(String appName) async {
+  /// Toggle brightness between 10% and 100%.
+  Future<bool> _toggleBrightness() async {
     try {
-      String scheme;
-      switch (appName) {
-        case 'camera':
-          scheme = 'camera://';
-          break;
-        case 'music':
-          scheme = 'music://';
-          break;
-        case 'messages':
-          scheme = 'sms://';
-          break;
-        case 'maps':
-          scheme = 'maps://';
-          break;
-        case 'phone':
-          scheme = 'tel://';
-          break;
-        case 'calendar':
-          scheme = 'calshow://';
-          break;
-        case 'notes':
-          scheme = 'mobilenotes://';
-          break;
-        case 'browser':
-          scheme = 'http://';
-          break;
-        case 'settings':
-          scheme = 'app-settings://';
-          break;
-        case 'photos':
-          scheme = 'photos-redirect://';
-          break;
-        case 'clock':
-          scheme = 'clock://';
-          break;
-        case 'weather':
-          scheme = 'weather://';
-          break;
-        case 'contacts':
-          scheme = 'contacts://';
-          break;
-        case 'wallet':
-          scheme = 'shoebox://';
-          break;
-        case 'files':
-          scheme = 'shareddocuments://';
-          break;
-        case 'mail':
-          scheme = 'mailto://';
-          break;
-        default:
-          return false;
+      final current = await ScreenBrightness().current;
+      if (current > 0.2) {
+        await ScreenBrightness().setScreenBrightness(0.1);
+      } else {
+        await ScreenBrightness().setScreenBrightness(1.0);
       }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
 
-      final url = Uri.parse(scheme);
-      if (await canLaunchUrl(url)) {
-        await launchUrl(url, mode: LaunchMode.externalApplication);
+  /// Create a 5-minute countdown notification.
+  Future<bool> _setTimer() async {
+    try {
+      await initNotifications();
+      await _ensureTzInitialized();
+
+      const androidDetails = AndroidNotificationDetails(
+        'voicespell_timer',
+        'VoiceSpell Timers',
+        channelDescription: 'Countdown timer notifications from VoiceSpell',
+        importance: Importance.high,
+        priority: Priority.high,
+      );
+      const details = NotificationDetails(android: androidDetails);
+
+      // Show an immediate "timer started" notification
+      await _notifications.show(
+        1001,
+        'Tempus — Timer Started',
+        'Your 5-minute timer is running. You will be notified when it ends.',
+        details,
+      );
+
+      // Schedule the end notification after 5 minutes using TZDateTime
+      final now = tz.TZDateTime.now(tz.local);
+      final endTime = now.add(const Duration(minutes: 5));
+
+      await _notifications.zonedSchedule(
+        1002,
+        'Tempus — Timer Complete!',
+        '5 minutes are up!',
+        endTime,
+        details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: null,
+      );
+
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Toggle mute/unmute system volume.
+  Future<bool> _toggleMute() async {
+    try {
+      if (_isMuted) {
+        _volume.setVolume(_volumeBeforeMute);
+        _isMuted = false;
+      } else {
+        _volumeBeforeMute = await _volume.getVolume();
+        _volume.setVolume(0.0);
+        _isMuted = true;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _launchUrl(String urlStr) async {
+    try {
+      final uri = Uri.parse(urlStr);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
         return true;
       }
       return false;
-    } catch (e) {
-      print('Error opening app: $e');
+    } catch (_) {
       return false;
     }
   }

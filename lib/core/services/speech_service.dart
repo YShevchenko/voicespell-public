@@ -1,7 +1,7 @@
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:permission_handler/permission_handler.dart';
 
-/// Service to handle speech recognition
+/// On-device speech-to-text service (offline capable via device STT engine).
 class SpeechService {
   static final SpeechService instance = SpeechService._();
   SpeechService._();
@@ -15,29 +15,32 @@ class SpeechService {
   Future<bool> initialize() async {
     if (_isInitialized) return true;
 
-    // Request microphone permission
     final status = await Permission.microphone.request();
-    if (!status.isGranted) {
-      return false;
-    }
+    if (!status.isGranted) return false;
 
-    // Initialize speech recognition
     _isInitialized = await _speech.initialize(
-      onError: (error) => print('Speech error: $error'),
-      onStatus: (status) => print('Speech status: $status'),
+      onError: (error) {
+        // ignore diagnostic noise
+      },
+      onStatus: (status) {
+        // ignore diagnostic noise
+      },
     );
 
     return _isInitialized;
   }
 
   Future<void> startListening({
-    required Function(String) onResult,
-    required Function() onListeningStarted,
-    required Function() onListeningStopped,
+    required void Function(String) onResult,
+    required void Function() onListeningStarted,
+    required void Function() onListeningStopped,
   }) async {
     if (!_isInitialized) {
-      final initialized = await initialize();
-      if (!initialized) return;
+      final ok = await initialize();
+      if (!ok) {
+        onListeningStopped();
+        return;
+      }
     }
 
     if (_isListening) {
@@ -49,16 +52,21 @@ class SpeechService {
 
     await _speech.listen(
       onResult: (result) {
-        if (result.finalResult) {
-          onResult(result.recognizedWords);
-          stopListening();
+        if (result.finalResult && result.recognizedWords.isNotEmpty) {
+          final words = result.recognizedWords.trim();
+          onResult(words);
+          _isListening = false;
+          onListeningStopped();
         }
       },
       listenFor: const Duration(seconds: 10),
       pauseFor: const Duration(seconds: 3),
-      partialResults: false,
-      cancelOnError: true,
-      listenMode: stt.ListenMode.confirmation,
+      listenOptions: stt.SpeechListenOptions(
+        partialResults: false,
+        cancelOnError: true,
+        // SpeechListenMode.dictation uses on-device model — offline capable.
+        listenMode: stt.ListenMode.dictation,
+      ),
     );
   }
 
@@ -72,5 +80,6 @@ class SpeechService {
   void dispose() {
     _speech.stop();
     _speech.cancel();
+    _isListening = false;
   }
 }

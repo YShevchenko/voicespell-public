@@ -1,11 +1,20 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'features/casting/presentation/screens/cast_screen.dart';
+import 'package:provider/provider.dart';
+import 'core/services/iap_service.dart';
+import 'presentation/providers/cast_provider.dart';
+import 'presentation/providers/spell_provider.dart';
+import 'presentation/screens/cast_screen.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(
-    const ProviderScope(
-      child: VoiceSpellApp(),
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => IAPService.instance),
+        ChangeNotifierProvider(create: (_) => SpellProvider()),
+        ChangeNotifierProvider(create: (_) => CastProvider()),
+      ],
+      child: const VoiceSpellApp(),
     ),
   );
 }
@@ -16,7 +25,7 @@ class VoiceSpellApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Voice Spell',
+      title: 'VoiceSpell',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -24,6 +33,7 @@ class VoiceSpellApp extends StatelessWidget {
           brightness: Brightness.dark,
         ),
         useMaterial3: true,
+        scaffoldBackgroundColor: Colors.black,
       ),
       home: const CastScreen(),
     );

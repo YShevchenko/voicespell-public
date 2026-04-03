@@ -1,126 +1,97 @@
-import 'dart:io';
-import 'package:flutter/services.dart';
-import 'package:purchases_flutter/purchases_flutter.dart';
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:in_app_purchase/in_app_purchase.dart';
 
-/// RevenueCat IAP service for managing premium access
-class IAPService {
+/// One-time IAP service for VoiceSpell Premium.
+/// Product ID: voicespell_premium — $3.99 one-time purchase.
+class IAPService extends ChangeNotifier {
   static final IAPService instance = IAPService._();
   IAPService._();
 
-  static const String _apiKeyIOS = 'YOUR_REVENUECAT_IOS_KEY';
-  static const String _apiKeyAndroid = 'YOUR_REVENUECAT_ANDROID_KEY';
-  static const String _entitlementID = 'premium';
-  static const String _productID = 'voice_spell_premium';
+  static const String _productId = 'voicespell_premium';
 
   bool _isPremium = false;
   bool get isPremium => _isPremium;
 
+  bool _isAvailable = false;
+  bool get isAvailable => _isAvailable;
+
+  bool _isPurchasing = false;
+  bool get isPurchasing => _isPurchasing;
+
+  ProductDetails? _product;
+  ProductDetails? get product => _product;
+
+  StreamSubscription<List<PurchaseDetails>>? _subscription;
+  final InAppPurchase _iap = InAppPurchase.instance;
+
   Future<void> initialize() async {
-    try {
-      // Configure RevenueCat
-      await Purchases.setLogLevel(LogLevel.debug);
+    _isAvailable = await _iap.isAvailable();
+    if (!_isAvailable) return;
 
-      PurchasesConfiguration configuration;
-      if (Platform.isIOS) {
-        configuration = PurchasesConfiguration(_apiKeyIOS);
-      } else if (Platform.isAndroid) {
-        configuration = PurchasesConfiguration(_apiKeyAndroid);
-      } else {
-        return;
+    // Listen to purchase updates
+    _subscription = _iap.purchaseStream.listen(
+      _onPurchaseUpdate,
+      onError: (_) {},
+    );
+
+    // Load product details
+    final response =
+        await _iap.queryProductDetails({_productId});
+    if (response.productDetails.isNotEmpty) {
+      _product = response.productDetails.first;
+    }
+
+    // Restore any existing purchases
+    await _iap.restorePurchases();
+
+    notifyListeners();
+  }
+
+  void _onPurchaseUpdate(List<PurchaseDetails> purchases) {
+    for (final purchase in purchases) {
+      if (purchase.productID == _productId) {
+        if (purchase.status == PurchaseStatus.purchased ||
+            purchase.status == PurchaseStatus.restored) {
+          _isPremium = true;
+          _isPurchasing = false;
+          if (purchase.pendingCompletePurchase) {
+            _iap.completePurchase(purchase);
+          }
+        } else if (purchase.status == PurchaseStatus.error) {
+          _isPurchasing = false;
+        } else if (purchase.status == PurchaseStatus.canceled) {
+          _isPurchasing = false;
+        }
       }
-
-      await Purchases.configure(configuration);
-
-      // Check initial premium status
-      await checkPremiumStatus();
-
-      // Listen to customer info updates
-      Purchases.addCustomerInfoUpdateListener(_customerInfoUpdateListener);
-    } catch (e) {
-      print('Error initializing IAP: $e');
     }
-  }
-
-  void _customerInfoUpdateListener(CustomerInfo customerInfo) {
-    _updatePremiumStatus(customerInfo);
-  }
-
-  Future<void> checkPremiumStatus() async {
-    try {
-      final customerInfo = await Purchases.getCustomerInfo();
-      _updatePremiumStatus(customerInfo);
-    } catch (e) {
-      print('Error checking premium status: $e');
-      // Default to false on error
-      _isPremium = false;
-    }
-  }
-
-  void _updatePremiumStatus(CustomerInfo customerInfo) {
-    final entitlement = customerInfo.entitlements.all[_entitlementID];
-    _isPremium = entitlement != null && entitlement.isActive;
+    notifyListeners();
   }
 
   Future<bool> purchase() async {
+    if (_product == null) return false;
+    _isPurchasing = true;
+    notifyListeners();
+
+    final param = PurchaseParam(productDetails: _product!);
     try {
-      final offerings = await Purchases.getOfferings();
-      final offering = offerings.current;
-
-      if (offering == null) {
-        print('No offerings available');
-        return false;
-      }
-
-      final package = offering.availablePackages.firstWhere(
-        (pkg) => pkg.storeProduct.identifier == _productID,
-        orElse: () => offering.availablePackages.first,
-      );
-
-      final customerInfo = await Purchases.purchasePackage(package);
-
-      _updatePremiumStatus(customerInfo);
-      return _isPremium;
-    } on PlatformException catch (e) {
-      final errorCode = PurchasesErrorHelper.getErrorCode(e);
-      if (errorCode == PurchasesErrorCode.purchaseCancelledError) {
-        print('Purchase cancelled');
-      } else {
-        print('Purchase error: $e');
-      }
-      return false;
-    } catch (e) {
-      print('Unexpected purchase error: $e');
+      return await _iap.buyNonConsumable(purchaseParam: param);
+    } catch (_) {
+      _isPurchasing = false;
+      notifyListeners();
       return false;
     }
   }
 
-  Future<bool> restorePurchases() async {
-    try {
-      final customerInfo = await Purchases.restorePurchases();
-      _updatePremiumStatus(customerInfo);
-      return _isPremium;
-    } catch (e) {
-      print('Error restoring purchases: $e');
-      return false;
-    }
+  Future<void> restorePurchases() async {
+    await _iap.restorePurchases();
   }
 
-  Future<String?> getPriceString() async {
-    try {
-      final offerings = await Purchases.getOfferings();
-      final offering = offerings.current;
+  String get priceString => _product?.price ?? '\$3.99';
 
-      if (offering == null) return null;
-
-      final package = offering.availablePackages.firstWhere(
-        (pkg) => pkg.storeProduct.identifier == _productID,
-        orElse: () => offering.availablePackages.first,
-      );
-
-      return package.storeProduct.priceString;
-    } catch (e) {
-      print('Error getting price: $e');
-      return null;
-    }
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
   }
 }
